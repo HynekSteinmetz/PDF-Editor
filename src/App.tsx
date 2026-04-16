@@ -1,11 +1,31 @@
 import { useEffect, useMemo, useState } from 'react';
-import { PDFDocument, rgb } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import type { PDFFont } from 'pdf-lib';
+import { saveAs } from 'file-saver';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import workerSrc from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { PdfPage } from './components/PdfPage';
 import type { GraphicElement, GraphicTool, PendingImage, ShapeKind } from './types/graphics';
+import type { ExportableTextItem } from './types/pdfText';
 import './App.css';
+
+declare global {
+  interface Window {
+    showSaveFilePicker?: (options?: {
+      suggestedName?: string;
+      types?: Array<{
+        description?: string;
+        accept: Record<string, string[]>;
+      }>;
+    }) => Promise<{
+      createWritable: () => Promise<{
+        write: (data: Blob) => Promise<void>;
+        close: () => Promise<void>;
+      }>;
+    }>;
+  }
+}
 
 console.log('[PDF-Editor] Worker source URL:', workerSrc);
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
@@ -20,17 +40,27 @@ function App() {
   const [scale, setScale] = useState(1.5);
   const [formValues, setFormValues] = useState<Record<string, string | boolean>>({});
   const [editedTexts, setEditedTexts] = useState<Record<string, Record<string, string>>>({});
+  const [textItemsByPage, setTextItemsByPage] = useState<Record<string, ExportableTextItem[]>>({});
   const [graphicsByPage, setGraphicsByPage] = useState<Record<string, GraphicElement[]>>({});
   const [activeTool, setActiveTool] = useState<GraphicTool>('select');
   const [shapeKind, setShapeKind] = useState<ShapeKind>('rect');
   const [shapeColor, setShapeColor] = useState('#f59e0b');
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
   const [activeGraphicId, setActiveGraphicId] = useState<string | null>(null);
+  const [manualDownload, setManualDownload] = useState<{ url: string; fileName: string } | null>(null);
 
   const pageNumbers = useMemo(() => {
     if (!pdfDoc) return [];
     return Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1);
   }, [pdfDoc]);
+
+  useEffect(() => {
+    return () => {
+      if (manualDownload) {
+        URL.revokeObjectURL(manualDownload.url);
+      }
+    };
+  }, [manualDownload]);
 
   async function handleFileUpload(file: File) {
     console.log('[PDF-Editor] File upload started:', file.name, file.size);
@@ -39,14 +69,17 @@ function App() {
     setInfoMessage(null);
     setPdfDoc(null);
     try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      console.log('[PDF-Editor] File read successfully, bytes:', bytes.length);
+      const fileBytes = new Uint8Array(await file.arrayBuffer());
+      // Keep one immutable copy for saving with pdf-lib and pass a separate copy to pdf.js.
+      const bytesForSave = fileBytes.slice();
+      const bytesForPreview = fileBytes.slice();
+      console.log('[PDF-Editor] File read successfully, bytes:', fileBytes.length);
       let doc: PDFDocumentProxy;
       
       try {
         console.log('[PDF-Editor] Attempting document load without worker...');
         const loadingTask = pdfjsLib.getDocument({ 
-          data: bytes,
+          data: bytesForPreview,
           rangeChunkSize: 65536,
           isEvalSupported: false
         });
@@ -57,7 +90,7 @@ function App() {
         setInfoMessage('Attempt 2: loading in compatibility mode...');
         try {
           const fallbackTask = pdfjsLib.getDocument({ 
-            data: bytes.buffer,
+            data: bytesForPreview.slice().buffer,
             rangeChunkSize: 65536,
             isEvalSupported: false
           });
@@ -70,13 +103,19 @@ function App() {
         }
       }
 
-      setPdfBytes(bytes);
+      setPdfBytes(bytesForSave);
       setPdfDoc(doc);
       setFileName(file.name);
       setFormValues({});
+      setEditedTexts({});
+      setTextItemsByPage({});
       setGraphicsByPage({});
       setPendingImage(null);
       setActiveGraphicId(null);
+      if (manualDownload) {
+        URL.revokeObjectURL(manualDownload.url);
+        setManualDownload(null);
+      }
       console.log('[PDF-Editor] PDF state updated successfully');
     } catch (error) {
       console.error('[PDF-Editor] Failed to load PDF:', error);
@@ -95,6 +134,13 @@ function App() {
     setGraphicsByPage((prev) => ({
       ...prev,
       [String(pageNumber)]: graphics,
+    }));
+  }
+
+  function onPageTextItemsChange(pageNumber: number, textItems: ExportableTextItem[]) {
+    setTextItemsByPage((prev) => ({
+      ...prev,
+      [String(pageNumber)]: textItems,
     }));
   }
 
@@ -149,9 +195,48 @@ function App() {
     if (!pdfBytes) return;
 
     try {
+      if (pdfBytes.length < 5 || String.fromCharCode(...pdfBytes.slice(0, 5)) !== '%PDF-') {
+        throw new Error('The loaded PDF bytes are invalid. Please re-upload the file.');
+      }
+
       const editable = await PDFDocument.load(pdfBytes);
       const form = editable.getForm();
       const fields = form.getFields();
+      const embeddedFonts = new Map<string, PDFFont>();
+
+      const getFontKey = (item: ExportableTextItem) => {
+        const family = (item.fontFamily || '').toLowerCase();
+        const fontWeight = typeof item.fontWeight === 'number' ? item.fontWeight : String(item.fontWeight || '').toLowerCase();
+        const fontStyle = String(item.fontStyle || '').toLowerCase();
+
+        if (family.includes('courier') || family.includes('mono')) {
+          if (fontWeight === '700' || fontWeight === 'bold') {
+            return fontStyle === 'italic' ? StandardFonts.CourierBoldOblique : StandardFonts.CourierBold;
+          }
+          return fontStyle === 'italic' ? StandardFonts.CourierOblique : StandardFonts.Courier;
+        }
+
+        if (family.includes('times') || family.includes('serif')) {
+          if (fontWeight === '700' || fontWeight === 'bold') {
+            return fontStyle === 'italic' ? StandardFonts.TimesRomanBoldItalic : StandardFonts.TimesRomanBold;
+          }
+          return fontStyle === 'italic' ? StandardFonts.TimesRomanItalic : StandardFonts.TimesRoman;
+        }
+
+        if (fontWeight === '700' || fontWeight === 'bold') {
+          return fontStyle === 'italic' ? StandardFonts.HelveticaBoldOblique : StandardFonts.HelveticaBold;
+        }
+        return fontStyle === 'italic' ? StandardFonts.HelveticaOblique : StandardFonts.Helvetica;
+      };
+
+      const getEmbeddedFont = async (item: ExportableTextItem) => {
+        const key = getFontKey(item);
+        const cached = embeddedFonts.get(key);
+        if (cached) return cached;
+        const font = await editable.embedFont(key);
+        embeddedFonts.set(key, font);
+        return font;
+      };
 
       // Apply form field values
       for (const field of fields) {
@@ -185,6 +270,49 @@ function App() {
         if (field.constructor.name === 'PDFOptionList' && typeof value === 'string') {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (field as any).select(value);
+        }
+      }
+
+      form.updateFieldAppearances();
+
+      for (const [key, textItems] of Object.entries(textItemsByPage)) {
+        const pageIndex = Number.parseInt(key, 10) - 1;
+        if (pageIndex < 0 || pageIndex >= editable.getPageCount()) continue;
+
+        const targetPage = editable.getPage(pageIndex);
+        const pageEdits = editedTexts[key] || {};
+
+        for (const item of textItems) {
+          const nextText = pageEdits[item.id];
+          if (nextText === undefined || nextText === item.content) continue;
+
+          const left = Math.min(item.rect[0], item.rect[2]);
+          const right = Math.max(item.rect[0], item.rect[2]);
+          const bottom = Math.min(item.rect[1], item.rect[3]);
+          const top = Math.max(item.rect[1], item.rect[3]);
+          const width = Math.max(1, right - left);
+          const height = Math.max(1, top - bottom);
+          const font = await getEmbeddedFont(item);
+          const fontSize = Math.max(4, item.fontSize || height * 0.9);
+          const padding = Math.min(2, height * 0.12);
+
+          targetPage.drawRectangle({
+            x: left,
+            y: bottom,
+            width,
+            height,
+            color: rgb(1, 1, 1),
+          });
+
+          targetPage.drawText(nextText, {
+            x: left,
+            y: bottom + padding,
+            size: fontSize,
+            font,
+            color: rgb(0, 0, 0),
+            maxWidth: width,
+            lineHeight: fontSize,
+          });
         }
       }
 
@@ -256,27 +384,42 @@ function App() {
         }
       }
 
-      // Apply edited text values
-      if (Object.keys(editedTexts).length > 0) {
-        console.log('[PDF-Editor] Applying edited texts...', editedTexts);
-        // Note: Direct text editing in existing PDFs is complex with pdf-lib.
-        // For now, we log that they were included. Full implementation would require
-        // either redrawing the PDF or using additional libraries.
-        console.log('[PDF-Editor] Edited texts recorded in form data');
-      }
-
       const outBytes = await editable.save();
       const outCopy = new Uint8Array(outBytes);
       const blob = new Blob([outCopy], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName.replace(/\.pdf$/i, '') + '-edited.pdf';
-      a.click();
-      URL.revokeObjectURL(url);
+      const outputName = fileName.replace(/\.pdf$/i, '') + '-edited.pdf';
+
+      if (manualDownload) {
+        URL.revokeObjectURL(manualDownload.url);
+        setManualDownload(null);
+      }
+
+      if (window.showSaveFilePicker) {
+        const fileHandle = await window.showSaveFilePicker({
+          suggestedName: outputName,
+          types: [
+            {
+              description: 'PDF document',
+              accept: { 'application/pdf': ['.pdf'] },
+            },
+          ],
+        });
+        const writable = await fileHandle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        setInfoMessage(`Saved ${outputName}.`);
+      } else {
+        const manualUrl = URL.createObjectURL(blob);
+        setManualDownload({ url: manualUrl, fileName: outputName });
+        saveAs(blob, outputName);
+        setInfoMessage('If the automatic download does not start, use the manual download link below.');
+      }
+
+      setErrorMessage(null);
     } catch (error) {
       console.error('Failed to save PDF:', error);
-      setErrorMessage('Failed to save the edited PDF file.');
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      setErrorMessage(`Failed to save the edited PDF file: ${errorMsg}`);
     }
   }
 
@@ -366,8 +509,13 @@ function App() {
         )}
 
         {isLoading && <p className="status">Loading PDF...</p>}
-  {infoMessage && <p className="status status-info">{infoMessage}</p>}
+        {infoMessage && <p className="status status-info">{infoMessage}</p>}
         {errorMessage && <p className="status status-error">{errorMessage}</p>}
+        {manualDownload && (
+          <p className="status status-info">
+            Manual download: <a href={manualDownload.url} download={manualDownload.fileName}>download {manualDownload.fileName}</a>
+          </p>
+        )}
 
         {pdfDoc && (
           <section className="viewer-wrap">
@@ -381,6 +529,7 @@ function App() {
                 onFieldChange={onFieldChange}
                 editedTexts={editedTexts[num] || {}}
                 onTextsChange={(texts) => setEditedTexts({ ...editedTexts, [num]: texts })}
+                onTextItemsChange={onPageTextItemsChange}
                 graphics={graphicsByPage[String(num)] || []}
                 onGraphicsChange={(graphics) => onGraphicsChange(num, graphics)}
                 activeTool={activeTool}
@@ -406,6 +555,7 @@ interface PdfPageWrapperProps {
   onFieldChange: (name: string, value: string | boolean) => void;
   editedTexts: Record<string, string>;
   onTextsChange: (texts: Record<string, string>) => void;
+  onTextItemsChange: (pageNumber: number, textItems: ExportableTextItem[]) => void;
   graphics: GraphicElement[];
   onGraphicsChange: (graphics: GraphicElement[]) => void;
   activeTool: GraphicTool;
@@ -424,6 +574,7 @@ function PdfPageWrapper({
   onFieldChange,
   editedTexts,
   onTextsChange,
+  onTextItemsChange,
   graphics,
   onGraphicsChange,
   activeTool,
@@ -471,6 +622,7 @@ function PdfPageWrapper({
       onFieldChange={onFieldChange}
       editedTexts={editedTexts}
       onTextsChange={onTextsChange}
+      onTextItemsChange={onTextItemsChange}
       graphics={graphics}
       onGraphicsChange={onGraphicsChange}
       activeTool={activeTool}

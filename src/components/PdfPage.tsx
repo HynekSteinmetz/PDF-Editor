@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { PDFPageProxy, PageViewport } from 'pdfjs-dist';
 import type { GraphicElement, GraphicTool, PendingImage, ShapeKind } from '../types/graphics';
+import type { ExportableTextItem } from '../types/pdfText';
 
 // Annotation data shape returned by pdfjs-dist
 interface AnnotationData {
@@ -50,6 +51,7 @@ interface PdfPageProps {
   onFieldChange: (name: string, value: string | boolean) => void;
   editedTexts: Record<string, string>;
   onTextsChange: (texts: Record<string, string>) => void;
+  onTextItemsChange: (pageNumber: number, textItems: ExportableTextItem[]) => void;
   graphics: GraphicElement[];
   onGraphicsChange: (graphics: GraphicElement[]) => void;
   activeTool: GraphicTool;
@@ -74,6 +76,7 @@ export function PdfPage({
   onFieldChange,
   editedTexts,
   onTextsChange,
+  onTextItemsChange,
   graphics,
   onGraphicsChange,
   activeTool,
@@ -522,6 +525,20 @@ export function PdfPage({
 
         if (isMounted) {
           setTextItems(items);
+          onTextItemsChange(
+            pageNumber,
+            items
+              .filter((item) => item.type === 'text')
+              .map((item) => ({
+                id: item.id,
+                rect: item.rect,
+                content: item.content,
+                fontFamily: item.fontFamily,
+                fontWeight: item.fontWeight,
+                fontStyle: item.fontStyle,
+                fontSize: item.fontSize,
+              }))
+          );
         }
       } catch (err) {
         console.error('[PdfPage] Content load error:', err);
@@ -540,7 +557,7 @@ export function PdfPage({
         renderTaskRef.current = null;
       }
     };
-  }, [page, pageNumber, scale]);
+  }, [onTextItemsChange, page, pageNumber, scale]);
 
   // Convert PDF rect [x1,y1,x2,y2] to CSS position on the canvas overlay
   function rectToStyle(rect: number[]): CSSProperties {
