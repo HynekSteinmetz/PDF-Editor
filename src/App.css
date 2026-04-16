@@ -1,0 +1,231 @@
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 2px solid var(--line);
+  background: linear-gradient(180deg, rgba(255, 250, 241, 0.98), rgba(248, 241, 230, 0.95));
+  backdrop-filter: blur(5px);
+}
+
+.topbar h1 {
+  font-family: var(--title-font);
+  font-size: 2rem;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+.topbar p {
+  margin-top: 0.3rem;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.actions button,
+.file-btn {
+  border: 1px solid var(--ink);
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: 0.55rem;
+  padding: 0.45rem 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.actions .tool-active {
+  background: #d9efe7;
+  border-color: #0f766e;
+}
+
+.shape-kind-select {
+  border: 1px solid var(--ink);
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: 0.55rem;
+  padding: 0.4rem 0.55rem;
+  font-weight: 600;
+}
+
+.color-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--ink);
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: 0.55rem;
+  padding: 0.32rem 0.45rem;
+  font-weight: 600;
+}
+
+.color-picker input {
+  width: 1.8rem;
+  height: 1.6rem;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.actions button:hover,
+.file-btn:hover {
+  background: #f3ecdf;
+  transform: translateY(-1px);
+}
+
+.actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.file-btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.file-btn input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.content {
+  padding: 1rem;
+}
+
+.placeholder {
+  margin: 4rem auto;
+  max-width: 38rem;
+  text-align: center;
+  padding: 2rem;
+  border: 2px dashed var(--line);
+  border-radius: 1rem;
+  background: rgba(255, 250, 241, 0.65);
+}
+
+.status {
+  text-align: center;
+  color: var(--ink-soft);
+  padding: 1rem;
+}
+
+.status-info {
+  color: #0b5f6b;
+  font-weight: 600;
+}
+
+.status-error {
+  color: #8a1f1f;
+  font-weight: 600;
+}
+
+.viewer-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.pdf-page {
+  width: auto;
+  max-width: 100%;
+}
+
+.page-label {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  margin: 0 0 0.4rem 0.3rem;
+}
+
+.page-canvas-container {
+  box-shadow: var(--paper-shadow);
+  border: 1px solid #d7d0c4;
+  background: white;
+  position: relative;
+  z-index: 1;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.page-canvas-container canvas {
+  display: block;
+}
+
+.graphics-layer {
+  z-index: 1;
+  pointer-events: auto;
+}
+
+.graphics-layer.tool-shape,
+.graphics-layer.tool-image {
+  pointer-events: auto;
+}
+
+.graphic-resize-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  right: -7px;
+  bottom: -7px;
+  border-radius: 50%;
+  background: #0f766e;
+  border: 2px solid #ffffff;
+  cursor: nwse-resize;
+}
+
+.graphic-delete-btn {
+  position: absolute;
+  top: -11px;
+  right: -11px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid #8a1f1f;
+  background: #ffffff;
+  color: #8a1f1f;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+}
+
+@media (max-width: 920px) {
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .topbar h1 {
+    font-size: 1.7rem;
+  }
+
+  .actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .content {
+    padding: 0.6rem;
+  }
+}

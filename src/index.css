@@ -1,0 +1,45 @@
+:root {
+  --bg: #f1eee7;
+  --panel: #fffaf1;
+  --ink: #1b1a17;
+  --ink-soft: #5f5a50;
+  --line: #d8cfbf;
+  --accent: #0f6d62;
+  --accent-strong: #084b43;
+  --paper-shadow: 0 12px 30px rgba(40, 28, 8, 0.14);
+  --ui-font: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+  --title-font: 'Bebas Neue', 'Arial Narrow', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--ui-font);
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 15% 10%, #f8f4eb 0 16%, transparent 17%),
+    radial-gradient(circle at 88% 16%, #ece4d6 0 14%, transparent 15%),
+    linear-gradient(135deg, #f3efe6 0%, #eae2d4 100%);
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+}
