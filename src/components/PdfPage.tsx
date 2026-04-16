@@ -167,6 +167,71 @@ export function PdfPage({
           const top = Math.min(Math.max(ay1, ay2), Math.max(by1, by2));
           return right > left && top > bottom;
         };
+        const normalizeRect = (rect: number[]) => {
+          const left = Math.min(rect[0], rect[2]);
+          const right = Math.max(rect[0], rect[2]);
+          const bottom = Math.min(rect[1], rect[3]);
+          const top = Math.max(rect[1], rect[3]);
+          return [left, bottom, right, top] as const;
+        };
+        const splitTextAroundFields = (
+          text: string,
+          rect: number[],
+          width: number,
+        ) => {
+          const [tokenLeft, tokenBottom, tokenRight, tokenTop] = normalizeRect(rect);
+          const tokenWidth = Math.max(1, tokenRight - tokenLeft, width);
+          const overlaps = fieldRects
+            .map((fieldRect) => normalizeRect(fieldRect))
+            .filter(([fieldLeft, fieldBottom, fieldRight, fieldTop]) => {
+              const verticalOverlap = Math.min(tokenTop, fieldTop) - Math.max(tokenBottom, fieldBottom);
+              const horizontalOverlap = Math.min(tokenRight, fieldRight) - Math.max(tokenLeft, fieldLeft);
+              return verticalOverlap > 0 && horizontalOverlap > 0;
+            })
+            .sort((left, right) => left[0] - right[0]);
+
+          if (overlaps.length === 0) {
+            return [{ text, rect, width: tokenWidth }];
+          }
+
+          const remainingRanges: Array<[number, number]> = [[tokenLeft, tokenRight]];
+          for (const [fieldLeft, , fieldRight] of overlaps) {
+            for (let index = remainingRanges.length - 1; index >= 0; index -= 1) {
+              const [rangeLeft, rangeRight] = remainingRanges[index];
+              const overlapLeft = Math.max(rangeLeft, fieldLeft);
+              const overlapRight = Math.min(rangeRight, fieldRight);
+              if (overlapRight <= overlapLeft) continue;
+              remainingRanges.splice(index, 1);
+              if (rangeLeft < overlapLeft) {
+                remainingRanges.splice(index, 0, [rangeLeft, overlapLeft]);
+              }
+              if (overlapRight < rangeRight) {
+                remainingRanges.splice(index + (rangeLeft < overlapLeft ? 1 : 0), 0, [overlapRight, rangeRight]);
+              }
+            }
+          }
+
+          return remainingRanges
+            .filter(([rangeLeft, rangeRight]) => rangeRight - rangeLeft > 4)
+            .map(([rangeLeft, rangeRight]) => {
+              const startRatio = (rangeLeft - tokenLeft) / tokenWidth;
+              const endRatio = (rangeRight - tokenLeft) / tokenWidth;
+              const startIndex = Math.max(0, Math.floor(startRatio * text.length));
+              const endIndex = Math.min(text.length, Math.ceil(endRatio * text.length));
+              const segmentText = text
+                .slice(startIndex, endIndex)
+                .replace(/[_]+/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+              return {
+                text: segmentText,
+                rect: [rangeLeft, tokenBottom, rangeRight, tokenTop],
+                width: rangeRight - rangeLeft,
+              };
+            })
+            .filter((segment) => segment.text.length > 0);
+        };
 
         // Load form fields (annotations)
         try {
@@ -272,16 +337,19 @@ export function PdfPage({
                 height,
               );
               const tokenRect: number[] = [x, y, x + width, y + height];
+              const tokenSegments = splitTextAroundFields(textItem.str, tokenRect, width);
 
-              extractedTokens.push({
-                text: textItem.str,
-                rect: tokenRect,
-                fontName: textItem.fontName,
-                height,
-                width,
-                centerY: y + height * 0.5,
-                fontSize,
-              });
+              for (const segment of tokenSegments) {
+                extractedTokens.push({
+                  text: segment.text,
+                  rect: segment.rect,
+                  fontName: textItem.fontName,
+                  height,
+                  width: segment.width,
+                  centerY: y + height * 0.5,
+                  fontSize,
+                });
+              }
             }
           });
 
