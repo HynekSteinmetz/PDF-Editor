@@ -1,73 +1,94 @@
-# React + TypeScript + Vite
+# PDF Editor
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Browser-based PDF editor built with React, TypeScript, Vite, pdf.js, and pdf-lib.
 
-Currently, two official plugins are available:
+It loads PDF files directly in the browser, renders form widgets and detected text overlays, and lets you add simple graphic elements such as shapes and images.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Features
 
-## React Compiler
+- Open PDF files locally in the browser
+- Render PDF pages with pdf.js
+- Edit detected PDF form fields
+- Click detected text blocks to edit them in the UI
+- Add rectangle and ellipse overlays
+- Upload and place PNG/JPG images on top of a PDF page
+- Move and resize graphic overlays
+- Export a modified PDF with form values, shapes, and images applied
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Current limitations
 
-## Expanding the ESLint configuration
+- Free-text overlay edits are currently editable in the UI, but they are not yet written back into the exported PDF file
+- Text detection is heuristic-based and may still need tuning for some document layouts
+- Shape and image overlays are page-based and do not currently support rotation or layer ordering
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Tech stack
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+- React 19
+- TypeScript
+- Vite
+- pdfjs-dist
+- pdf-lib
+- ESLint
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## Getting started
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+### Prerequisites
+
+- Node.js 20+
+- npm 10+
+
+### Install dependencies
+
+```bash
+npm install
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### Start the development server
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run dev
 ```
+
+### Build for production
+
+```bash
+npm run build
+```
+
+### Run lint checks
+
+```bash
+npm run lint
+```
+
+## Project structure
+
+```text
+src/
+  components/
+    PdfPage.tsx      # Page rendering, overlays, interaction logic
+  types/
+    graphics.ts      # Shared shape/image overlay types
+  App.tsx            # Application state and toolbar actions
+  App.css            # App-specific styling
+  index.css          # Global styling
+```
+
+## GitHub Actions
+
+The repository includes a CI workflow that runs on pushes and pull requests to `main`:
+
+- `npm ci`
+- `npm run lint`
+- `npm run build`
+
+## Roadmap ideas
+
+- Write free-text overlay edits back into exported PDFs
+- Add delete/lock controls for text overlays
+- Add rotation and layer ordering for graphics
+- Improve text segmentation for more PDF layouts
+
+## License
+
+No license file is currently included in this repository.

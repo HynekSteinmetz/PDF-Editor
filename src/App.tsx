@@ -54,7 +54,7 @@ function App() {
         console.log('[PDF-Editor] Document loaded successfully, pages:', doc.numPages);
       } catch (primaryError) {
         console.warn('[PDF-Editor] Primary load failed, attempting with ArrayBuffer:', primaryError);
-        setInfoMessage('Pokus 2: Načítání v kompatibilním režimu...');
+        setInfoMessage('Attempt 2: loading in compatibility mode...');
         try {
           const fallbackTask = pdfjsLib.getDocument({ 
             data: bytes.buffer,
@@ -63,7 +63,7 @@ function App() {
           });
           doc = await fallbackTask.promise;
           console.log('[PDF-Editor] Fallback load successful, pages:', doc.numPages);
-          setInfoMessage('PDF bylo nacteno v kompatibilnim rezimu.');
+          setInfoMessage('The PDF was loaded in compatibility mode.');
         } catch (fallbackError) {
           console.error('[PDF-Editor] Both attempts failed:', fallbackError);
           throw fallbackError;
@@ -81,7 +81,7 @@ function App() {
     } catch (error) {
       console.error('[PDF-Editor] Failed to load PDF:', error);
       const errorMsg = error instanceof Error ? error.message : String(error);
-      setErrorMessage(`Chyba: ${errorMsg}`);
+      setErrorMessage(`Error: ${errorMsg}`);
     } finally {
       setIsLoading(false);
     }
@@ -137,11 +137,11 @@ function App() {
         name: file.name,
       });
       setActiveTool('image');
-      setInfoMessage(`Obrazek ${file.name} je pripraveny. Kliknete na stranku pro vlozeni.`);
+      setInfoMessage(`Image ${file.name} is ready. Click on the page to place it.`);
       setErrorMessage(null);
     } catch (error) {
       console.error('[PDF-Editor] Failed to load image:', error);
-      setErrorMessage('Nepodarilo se nacist obrazek.');
+      setErrorMessage('Failed to load the image.');
     }
   }
 
@@ -276,7 +276,7 @@ function App() {
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Failed to save PDF:', error);
-      setErrorMessage('Nepodarilo se ulozit upraveny PDF soubor.');
+      setErrorMessage('Failed to save the edited PDF file.');
     }
   }
 
@@ -284,12 +284,12 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <h1>PDF Form Editor</h1>
-          <p>Upravujte vyplnitelna pole primo v prohlizeci pomoci pdf.js</p>
+          <h1>PDF Editor</h1>
+          <p>Edit PDF form fields and overlay content directly in the browser with pdf.js.</p>
         </div>
         <div className="actions">
           <label className="file-btn">
-            Vybrat PDF
+            Choose PDF
             <input
               type="file"
               accept="application/pdf"
@@ -311,7 +311,7 @@ function App() {
             onClick={() => setActiveTool('select')}
             disabled={!pdfDoc}
           >
-            Vyber
+            Select
           </button>
           <button
             type="button"
@@ -330,8 +330,8 @@ function App() {
             <option value="rect">Rectangle</option>
             <option value="ellipse">Ellipse</option>
           </select>
-          <label className="color-picker" aria-label="Barva shape">
-            <span>Barva</span>
+          <label className="color-picker" aria-label="Shape color">
+            <span>Color</span>
             <input
               type="color"
               value={shapeColor}
@@ -340,7 +340,7 @@ function App() {
             />
           </label>
           <label className="file-btn">
-            Nahrat obrazek
+            Upload image
             <input
               type="file"
               accept="image/png,image/jpeg"
@@ -353,19 +353,19 @@ function App() {
               }}
             />
           </label>
-          <button type="button" onClick={() => void handleDownload()} disabled={!pdfDoc}>Stahnout upravene PDF</button>
+          <button type="button" onClick={() => void handleDownload()} disabled={!pdfDoc}>Download edited PDF</button>
         </div>
       </header>
 
       <main className="content">
         {!pdfDoc && !isLoading && (
           <section className="placeholder">
-            <h2>Nahrajte PDF soubor</h2>
-            <p>Aplikace najde formulare a umozni jejich editaci.</p>
+            <h2>Upload a PDF file</h2>
+            <p>The app detects form fields and lets you edit them.</p>
           </section>
         )}
 
-        {isLoading && <p className="status">Nacitam PDF...</p>}
+        {isLoading && <p className="status">Loading PDF...</p>}
   {infoMessage && <p className="status status-info">{infoMessage}</p>}
         {errorMessage && <p className="status status-error">{errorMessage}</p>}
 
@@ -446,7 +446,7 @@ function PdfPageWrapper({
     }).catch((err) => {
       console.error(`[PdfPageWrapper] Failed to load page ${pageNumber}:`, err);
       if (!cancelled) {
-        setPageError(`Nepodarilo se nacist stranu ${pageNumber}.`);
+        setPageError(`Failed to load page ${pageNumber}.`);
       }
     });
     return () => {
@@ -459,7 +459,7 @@ function PdfPageWrapper({
   }
 
   if (!page) {
-    return <div className="status">Nacitam stranu {pageNumber}...</div>;
+    return <div className="status">Loading page {pageNumber}...</div>;
   }
 
   return (

@@ -146,7 +146,7 @@ export function PdfPage({
         }
         console.error('[PdfPage] Render error on page', pageNumber, ':', err);
         if (isMounted) {
-          setRenderError(`Chyba vykreslení: ${err instanceof Error ? err.message : String(err)}`);
+          setRenderError(`Render error: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     };
@@ -601,7 +601,7 @@ export function PdfPage({
             key={item.id}
             type="button"
             aria-label="Edit text"
-            title="Klikni pro editaci textu"
+            title="Click to edit text"
             style={{
               ...posStyle,
               boxSizing: 'border-box',
