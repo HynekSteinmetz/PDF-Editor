@@ -39,6 +39,7 @@ interface TextItem {
   fontFamily?: string;
   fontWeight?: CSSProperties['fontWeight'];
   fontStyle?: CSSProperties['fontStyle'];
+  fontSize?: number;
 }
 
 interface PdfPageProps {
@@ -212,6 +213,7 @@ export function PdfPage({
             height: number;
             width: number;
             centerY: number;
+            fontSize: number;
           }> = [];
           const normalizeText = (value: string) => value.replace(/\s+/g, ' ').trim();
           const pickFontFamily = (fontName?: string) => {
@@ -263,6 +265,12 @@ export function PdfPage({
               const y = textItem.transform[5] || 0;
               const height = textItem.height || Math.abs(textItem.transform[3] || 0) || 12;
               const width = textItem.width || textItem.str.length * 6;
+              const fontSize = Math.max(
+                1,
+                Math.abs(textItem.transform[3] || 0),
+                Math.abs(textItem.transform[0] || 0),
+                height,
+              );
               const tokenRect: number[] = [x, y, x + width, y + height];
 
               extractedTokens.push({
@@ -272,6 +280,7 @@ export function PdfPage({
                 height,
                 width,
                 centerY: y + height * 0.5,
+                fontSize,
               });
             }
           });
@@ -318,6 +327,7 @@ export function PdfPage({
             fontFamily: string;
             fontWeight: CSSProperties['fontWeight'];
             fontStyle: CSSProperties['fontStyle'];
+            fontSize: number;
           }> = [];
           for (const line of lines) {
             const tokens = [...line.tokens].sort((left, right) => left.rect[0] - right.rect[0]);
@@ -326,6 +336,7 @@ export function PdfPage({
               rect: number[];
               fontName?: string;
               avgCharWidth: number;
+              avgFontSize: number;
               tokenCount: number;
             } | null = null;
 
@@ -344,6 +355,7 @@ export function PdfPage({
                   fontFamily: pickFontFamily(currentSegment.fontName),
                   fontWeight: pickFontWeight(currentSegment.fontName),
                   fontStyle: pickFontStyle(currentSegment.fontName),
+                  fontSize: currentSegment.avgFontSize,
                 });
               }
               currentSegment = null;
@@ -358,6 +370,7 @@ export function PdfPage({
                   rect: [...token.rect],
                   fontName: token.fontName,
                   avgCharWidth: charWidth,
+                  avgFontSize: token.fontSize,
                   tokenCount: 1,
                 };
                 continue;
@@ -374,6 +387,7 @@ export function PdfPage({
                   rect: [...token.rect],
                   fontName: token.fontName,
                   avgCharWidth: charWidth,
+                  avgFontSize: token.fontSize,
                   tokenCount: 1,
                 };
                 continue;
@@ -391,6 +405,9 @@ export function PdfPage({
               currentSegment.avgCharWidth =
                 (currentSegment.avgCharWidth * currentSegment.tokenCount + charWidth) /
                 (currentSegment.tokenCount + 1);
+              currentSegment.avgFontSize =
+                (currentSegment.avgFontSize * currentSegment.tokenCount + token.fontSize) /
+                (currentSegment.tokenCount + 1);
               currentSegment.tokenCount += 1;
             }
 
@@ -403,6 +420,7 @@ export function PdfPage({
             fontFamily: string;
             fontWeight: CSSProperties['fontWeight'];
             fontStyle: CSSProperties['fontStyle'];
+            fontSize: number;
           }> = [];
           for (const candidate of rawTextItems) {
             const isDuplicate = dedupedTextItems.some((existing) => {
@@ -425,6 +443,7 @@ export function PdfPage({
               fontFamily: entry.fontFamily,
               fontWeight: entry.fontWeight,
               fontStyle: entry.fontStyle,
+              fontSize: entry.fontSize,
             });
           }
 
@@ -594,6 +613,7 @@ export function PdfPage({
       const value = editedTexts[item.id] !== undefined ? editedTexts[item.id] : item.content;
       const hasUserEdit = editedTexts[item.id] !== undefined && editedTexts[item.id] !== item.content;
       const isActive = activeTextId === item.id;
+      const fontSize = item.fontSize ? Math.max(8, item.fontSize * scale) : Math.max(8, (posStyle.height as number) * 0.82);
 
       if (!isActive && !hasUserEdit) {
         return (
@@ -624,13 +644,16 @@ export function PdfPage({
             ...posStyle,
             boxSizing: 'border-box',
             background: '#f7fbff',
-            border: '1px solid rgba(80, 130, 190, 0.55)',
-            padding: '1px 2px',
+            border: '1px solid rgba(80, 130, 190, 0.35)',
+            padding: 0,
             color: '#11253b',
-            fontSize: `${Math.max(8, (posStyle.height as number) * 0.65)}px`,
+            fontSize: `${fontSize}px`,
             fontFamily: item.fontFamily || 'inherit',
             fontWeight: item.fontWeight || 'normal',
             fontStyle: item.fontStyle || 'normal',
+            lineHeight: 1,
+            borderRadius: 0,
+            letterSpacing: '0px',
             zIndex: 2,
           }}
           value={value}
