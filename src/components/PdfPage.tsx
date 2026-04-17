@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { PDFPageProxy, PageViewport } from 'pdfjs-dist';
 import type { GraphicElement, GraphicTool, PendingImage, ShapeKind } from '../types/graphics';
@@ -41,6 +41,7 @@ interface TextItem {
   fontWeight?: CSSProperties['fontWeight'];
   fontStyle?: CSSProperties['fontStyle'];
   fontSize?: number;
+  sourceRects?: number[][];
 }
 
 interface PdfPageProps {
@@ -91,6 +92,10 @@ export function PdfPage({
   const [viewport, setViewport] = useState<PageViewport | null>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
   const [activeTextId, setActiveTextId] = useState<string | null>(null);
+  const [selectedTextIds, setSelectedTextIds] = useState<Set<string>>(new Set());
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [selectionBox, setSelectionBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [, setContextTextId] = useState<string | null>(null);
   const renderTaskRef = useRef<Awaited<ReturnType<typeof page.render>> | null>(null);
   const dragRef = useRef<{
     id: string;
@@ -102,6 +107,69 @@ export function PdfPage({
     startWidth: number;
     startHeight: number;
   } | null>(null);
+
+  const textResizeRef = useRef<{
+    id: string;
+    startX: number;
+    startY: number;
+    startLeft: number;
+    startTop: number;
+    startWidth: number;
+    startHeight: number;
+  } | null>(null);
+
+  const textMoveRef = useRef<{
+    id: string;
+    startX: number;
+    startY: number;
+    startLeft: number;
+    startTop: number;
+    width: number;
+    height: number;
+    moved: boolean;
+  } | null>(null);
+  const suppressTextClickRef = useRef<string | null>(null);
+  const selectionDragRef = useRef<{
+    startX: number;
+    startY: number;
+    appendToSelection: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setContextMenu(null);
+        setSelectedTextIds(new Set());
+      }
+    };
+
+    const handleClick = () => {
+      setContextMenu(null);
+    };
+
+    if (contextMenu) {
+      window.addEventListener('keydown', handleKeyDown);
+      window.addEventListener('click', handleClick);
+    }
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('click', handleClick);
+    };
+  }, [contextMenu]);
+
+  // Delete selected text areas with Delete/Backspace key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTextIds.size > 0 && activeTextId === null) {
+        e.preventDefault();
+        deleteSelectedTexts();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTextIds, activeTextId]);
 
   // Render page canvas and load text + annotations
   useEffect(() => {
@@ -515,6 +583,7 @@ export function PdfPage({
               fontWeight: entry.fontWeight,
               fontStyle: entry.fontStyle,
               fontSize: entry.fontSize,
+              sourceRects: [entry.rect],
             });
           }
 
@@ -557,7 +626,7 @@ export function PdfPage({
         renderTaskRef.current = null;
       }
     };
-  }, [onTextItemsChange, page, pageNumber, scale]);
+  }, [page, pageNumber, scale]);
 
   // Convert PDF rect [x1,y1,x2,y2] to CSS position on the canvas overlay
   function rectToStyle(rect: number[]): CSSProperties {
@@ -691,6 +760,346 @@ export function PdfPage({
     }
   }
 
+  function rectsEqual(left: number[], right: number[]) {
+    return left.length === right.length && left.every((value, index) => Math.abs(value - right[index]) < 0.01);
+  }
+
+  function getViewportRect(rect: number[]) {
+    if (!viewport) return null;
+    const [vx1, vy1, vx2, vy2] = viewport.convertToViewportRectangle(rect);
+    return {
+      left: Math.min(vx1, vx2),
+      top: Math.min(vy1, vy2),
+      right: Math.max(vx1, vx2),
+      bottom: Math.max(vy1, vy2),
+    };
+  }
+
+  function collectTextIdsInSelection(box: { left: number; top: number; width: number; height: number }) {
+    const boxRight = box.left + box.width;
+    const boxBottom = box.top + box.height;
+    return textItems
+      .filter((item) => {
+        if (item.type !== 'text') return false;
+        const itemRect = getViewportRect(item.rect);
+        if (!itemRect) return false;
+        // Only select when area is fully contained inside the selection box
+        return (
+          itemRect.left >= box.left &&
+          itemRect.right <= boxRight &&
+          itemRect.top >= box.top &&
+          itemRect.bottom <= boxBottom
+        );
+      })
+      .map((item) => item.id);
+  }
+
+  function onSelectionMouseDownCapture(event: ReactMouseEvent<HTMLDivElement>) {
+    if (!viewport || activeTool !== 'select' || event.button !== 0) return;
+
+    const target = event.target as HTMLElement;
+    const shouldForceMarquee = event.shiftKey;
+    const startedOnContainer = target === event.currentTarget || target.tagName === 'CANVAS';
+    if (!shouldForceMarquee && !startedOnContainer) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveTextId(null);
+    setContextMenu(null);
+
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const startX = event.clientX - bounds.left;
+    const startY = event.clientY - bounds.top;
+    const appendToSelection = event.ctrlKey || event.metaKey;
+
+    selectionDragRef.current = { startX, startY, appendToSelection };
+    setSelectionBox({ left: startX, top: startY, width: 0, height: 0 });
+
+    const onMove = (moveEvent: MouseEvent) => {
+      const drag = selectionDragRef.current;
+      if (!drag) return;
+
+      const currentX = Math.max(0, Math.min(moveEvent.clientX - bounds.left, bounds.width));
+      const currentY = Math.max(0, Math.min(moveEvent.clientY - bounds.top, bounds.height));
+      const box = {
+        left: Math.min(drag.startX, currentX),
+        top: Math.min(drag.startY, currentY),
+        width: Math.abs(currentX - drag.startX),
+        height: Math.abs(currentY - drag.startY),
+      };
+
+      setSelectionBox(box);
+      const hitIds = collectTextIdsInSelection(box);
+      setSelectedTextIds((prev) => {
+        const next = drag.appendToSelection ? new Set(prev) : new Set<string>();
+        hitIds.forEach((id) => next.add(id));
+        return next;
+      });
+    };
+
+    const onUp = () => {
+      selectionDragRef.current = null;
+      setSelectionBox(null);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
+  function toExportableTextItems(items: TextItem[]) {
+    return items
+      .filter((item) => item.type === 'text')
+      .map((item) => ({
+        id: item.id,
+        rect: item.rect,
+        content: editedTexts[item.id] !== undefined ? editedTexts[item.id] : item.content,
+        sourceRects: item.sourceRects,
+        fontFamily: item.fontFamily,
+        fontWeight: item.fontWeight,
+        fontStyle: item.fontStyle,
+        fontSize: item.fontSize,
+      }));
+  }
+
+  function updateTextRect(id: string, nextRect: number[], notifyExport = true) {
+    setTextItems((prev) => {
+      const next = prev.map((item) => {
+        if (item.id !== id || item.type !== 'text') return item;
+        return { ...item, rect: nextRect };
+      });
+      if (notifyExport) {
+        onTextItemsChange(pageNumber, toExportableTextItems(next));
+      }
+      return next;
+    });
+  }
+
+  function onTextResizeMouseDown(event: ReactMouseEvent<HTMLDivElement>, id: string) {
+    if (!viewport) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const target = textItems.find((item) => item.id === id && item.type === 'text');
+    if (!target) return;
+
+    const [vx1, vy1, vx2, vy2] = viewport.convertToViewportRectangle(target.rect);
+    const startLeft = Math.min(vx1, vx2);
+    const startTop = Math.min(vy1, vy2);
+    const startWidth = Math.abs(vx2 - vx1);
+    const startHeight = Math.abs(vy2 - vy1);
+
+    textResizeRef.current = {
+      id,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLeft,
+      startTop,
+      startWidth,
+      startHeight,
+    };
+
+    const onMove = (moveEvent: MouseEvent) => {
+      const drag = textResizeRef.current;
+      if (!drag || !viewport) return;
+
+      const minWidth = 28;
+      const minHeight = 18;
+      const deltaX = moveEvent.clientX - drag.startX;
+      const deltaY = moveEvent.clientY - drag.startY;
+
+      const width = Math.max(minWidth, Math.min(drag.startWidth + deltaX, viewport.width - drag.startLeft));
+      const height = Math.max(minHeight, Math.min(drag.startHeight + deltaY, viewport.height - drag.startTop));
+
+      const [pdfLeftBottomX, pdfLeftBottomY] = viewport.convertToPdfPoint(drag.startLeft, drag.startTop + height);
+      const [pdfRightTopX, pdfRightTopY] = viewport.convertToPdfPoint(drag.startLeft + width, drag.startTop);
+
+      const nextRect: number[] = [
+        Math.min(pdfLeftBottomX, pdfRightTopX),
+        Math.min(pdfLeftBottomY, pdfRightTopY),
+        Math.max(pdfLeftBottomX, pdfRightTopX),
+        Math.max(pdfLeftBottomY, pdfRightTopY),
+      ];
+
+      updateTextRect(drag.id, nextRect, true);
+    };
+
+    const onUp = () => {
+      textResizeRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
+  function onTextMoveMouseDown(event: ReactMouseEvent<HTMLButtonElement>, id: string) {
+    if (!viewport) return;
+    if (event.button !== 0) return;
+    if (event.ctrlKey || event.metaKey) return;
+
+    const target = textItems.find((item) => item.id === id && item.type === 'text');
+    if (!target) return;
+
+    const [vx1, vy1, vx2, vy2] = viewport.convertToViewportRectangle(target.rect);
+    const startLeft = Math.min(vx1, vx2);
+    const startTop = Math.min(vy1, vy2);
+    const width = Math.abs(vx2 - vx1);
+    const height = Math.abs(vy2 - vy1);
+
+    textMoveRef.current = {
+      id,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLeft,
+      startTop,
+      width,
+      height,
+      moved: false,
+    };
+
+    const onMove = (moveEvent: MouseEvent) => {
+      const drag = textMoveRef.current;
+      if (!drag || !viewport) return;
+
+      const deltaX = moveEvent.clientX - drag.startX;
+      const deltaY = moveEvent.clientY - drag.startY;
+      if (Math.abs(deltaX) > 2 || Math.abs(deltaY) > 2) {
+        drag.moved = true;
+      }
+
+      const left = Math.max(0, Math.min(drag.startLeft + deltaX, viewport.width - drag.width));
+      const top = Math.max(0, Math.min(drag.startTop + deltaY, viewport.height - drag.height));
+
+      const [pdfLeftBottomX, pdfLeftBottomY] = viewport.convertToPdfPoint(left, top + drag.height);
+      const [pdfRightTopX, pdfRightTopY] = viewport.convertToPdfPoint(left + drag.width, top);
+
+      const nextRect: number[] = [
+        Math.min(pdfLeftBottomX, pdfRightTopX),
+        Math.min(pdfLeftBottomY, pdfRightTopY),
+        Math.max(pdfLeftBottomX, pdfRightTopX),
+        Math.max(pdfLeftBottomY, pdfRightTopY),
+      ];
+
+      updateTextRect(drag.id, nextRect, true);
+    };
+
+    const onUp = () => {
+      const drag = textMoveRef.current;
+      if (drag?.moved) {
+        suppressTextClickRef.current = drag.id;
+      }
+      textMoveRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
+  function deleteSelectedTexts() {
+    if (selectedTextIds.size === 0) return;
+    const remainingItems = textItems.filter((item) => !selectedTextIds.has(item.id));
+    setTextItems(remainingItems);
+    const newEditedTexts = { ...editedTexts };
+    selectedTextIds.forEach((id) => delete newEditedTexts[id]);
+    onTextsChange(newEditedTexts);
+    onTextItemsChange(pageNumber, toExportableTextItems(remainingItems));
+    setSelectedTextIds(new Set());
+  }
+
+  function buildMergedContent(
+    selectedItems: TextItem[],
+    mode: 'space' | 'stacked-newline',
+  ) {
+    if (mode === 'space') {
+      return selectedItems
+        .map((item) => editedTexts[item.id] !== undefined ? editedTexts[item.id] : item.content)
+        .join(' ');
+    }
+
+    return selectedItems
+      .map((item, i) => {
+        const text = editedTexts[item.id] !== undefined ? editedTexts[item.id] : item.content;
+        if (i === selectedItems.length - 1) return text;
+        const thisTop = Math.min(item.rect[1], item.rect[3]);
+        const thisBottom = Math.max(item.rect[1], item.rect[3]);
+        const nextTop = Math.min(selectedItems[i + 1].rect[1], selectedItems[i + 1].rect[3]);
+        const nextBottom = Math.max(selectedItems[i + 1].rect[1], selectedItems[i + 1].rect[3]);
+        const onDifferentLine = nextTop >= thisBottom || thisTop >= nextBottom;
+        return text + (onDifferentLine ? '\n' : ' ');
+      })
+      .join('');
+  }
+
+  function mergeSelectedTexts(mode: 'space' | 'stacked-newline' = 'space') {
+    if (selectedTextIds.size < 2) return;
+
+    const selectedItems = textItems.filter((item) => selectedTextIds.has(item.id) && item.type === 'text');
+    if (selectedItems.length < 2) return;
+
+    // Sort by position (top to bottom, left to right)
+    selectedItems.sort((a, b) => {
+      const aTop = Math.min(a.rect[1], a.rect[3]);
+      const bTop = Math.min(b.rect[1], b.rect[3]);
+      if (Math.abs(aTop - bTop) > 5) return bTop - aTop;
+      return a.rect[0] - b.rect[0];
+    });
+
+    // Merge text content
+    const mergedContent = buildMergedContent(selectedItems, mode);
+    // Calculate bounding box
+    const minX = Math.min(...selectedItems.map((item) => Math.min(item.rect[0], item.rect[2])));
+    const maxX = Math.max(...selectedItems.map((item) => Math.max(item.rect[0], item.rect[2])));
+    const minY = Math.min(...selectedItems.map((item) => Math.min(item.rect[1], item.rect[3])));
+    const maxY = Math.max(...selectedItems.map((item) => Math.max(item.rect[1], item.rect[3])));
+
+    // Create new merged item
+    const mergedId = `text_merged_${Date.now()}`;
+    const newItem: TextItem = {
+      id: mergedId,
+      type: 'text',
+      rect: [minX, minY, maxX, maxY],
+      content: mergedContent,
+      sourceRects: selectedItems.flatMap((item) => item.sourceRects || [item.rect]).map((rect) => [...rect]),
+      isReadOnly: false,
+      fontFamily: selectedItems[0].fontFamily,
+      fontWeight: selectedItems[0].fontWeight,
+      fontStyle: selectedItems[0].fontStyle,
+      fontSize: selectedItems[0].fontSize,
+    };
+
+    // Update text items - remove old, add merged
+    const remainingItems = textItems.filter((item) => !selectedTextIds.has(item.id));
+    setTextItems([...remainingItems, newItem]);
+
+    // Update edited texts
+    const newEditedTexts = { ...editedTexts };
+    selectedItems.forEach((item) => delete newEditedTexts[item.id]);
+    newEditedTexts[mergedId] = mergedContent;
+    onTextsChange(newEditedTexts);
+
+    // Update exportable items
+    const exportableItems = [...remainingItems.filter((item) => item.type === 'text'), newItem].map((item) => ({
+      id: item.id,
+      rect: item.rect,
+      content: newEditedTexts[item.id] !== undefined ? newEditedTexts[item.id] : item.content,
+      sourceRects: item.sourceRects,
+      fontFamily: item.fontFamily,
+      fontWeight: item.fontWeight,
+      fontStyle: item.fontStyle,
+      fontSize: item.fontSize,
+    }));
+    onTextItemsChange(pageNumber, exportableItems);
+
+    // Clear selection
+    setSelectedTextIds(new Set());
+    setContextMenu(null);
+  }
+
   function renderField(item: TextItem, index: number) {
     if (item.type === 'text') {
       // Render editable text
@@ -698,38 +1107,149 @@ export function PdfPage({
       const value = editedTexts[item.id] !== undefined ? editedTexts[item.id] : item.content;
       const hasUserEdit = editedTexts[item.id] !== undefined && editedTexts[item.id] !== item.content;
       const isActive = activeTextId === item.id;
+      const isSelected = selectedTextIds.has(item.id);
       const fontSize = item.fontSize ? Math.max(8, item.fontSize * scale) : Math.max(8, (posStyle.height as number) * 0.82);
+      const sourceRects = item.sourceRects || [item.rect];
+      const hasGeometryChange = sourceRects.length !== 1 || !rectsEqual(sourceRects[0], item.rect);
 
-      if (!isActive && !hasUserEdit) {
-        return (
-          <button
-            key={item.id}
-            type="button"
-            aria-label="Edit text"
-            title="Click to edit text"
-            style={{
-              ...posStyle,
-              boxSizing: 'border-box',
-              background: 'transparent',
-              border: '1px dashed rgba(80, 130, 190, 0.28)',
-              padding: 0,
-              cursor: 'text',
-              zIndex: 2,
+      // Merged or modified text should be visible even when not in edit mode.
+      const isMergedText = item.id.startsWith('text_merged_');
+      const shouldBeMultiLine = isMergedText || (posStyle.height && (posStyle.height as number) > 50);
+      const showPreviewText = isMergedText || hasUserEdit || hasGeometryChange;
+      const shouldMaskOriginal = showPreviewText;
+      const maskRects = shouldMaskOriginal ? sourceRects : [];
+      const textOverlayStyle: CSSProperties = {
+        ...posStyle,
+        height: typeof posStyle.height === 'number' ? posStyle.height + 3 : posStyle.height,
+      };
+
+      const textControl = !isActive ? (
+        <button
+          key={item.id}
+          type="button"
+          aria-label="Edit text"
+          title="Click to edit · Ctrl+Click to add to selection · Shift+drag to select multiple"
+          style={{
+            ...textOverlayStyle,
+            boxSizing: 'border-box',
+            background: isSelected
+              ? 'rgba(100, 200, 255, 0.4)'
+              : (showPreviewText ? '#f7fbff' : 'transparent'),
+            border: '1px dotted rgba(0, 0, 0, 0.55)',
+            boxShadow: 'none',
+            padding: shouldBeMultiLine ? '2px 4px' : '0 2px',
+            color: '#11253b',
+            fontSize: `${fontSize}px`,
+            fontFamily: item.fontFamily || 'inherit',
+            fontWeight: item.fontWeight || 'normal',
+            fontStyle: item.fontStyle || 'normal',
+            lineHeight: shouldBeMultiLine ? 1.3 : 1,
+            letterSpacing: '0px',
+            textAlign: 'left',
+            whiteSpace: shouldBeMultiLine ? 'pre-wrap' : 'nowrap',
+            overflow: 'hidden',
+            textOverflow: shouldBeMultiLine ? 'clip' : 'ellipsis',
+            cursor: 'text',
+            zIndex: 2,
+          }}
+          onClick={(e) => {
+            if (suppressTextClickRef.current === item.id) {
+              suppressTextClickRef.current = null;
+              e.preventDefault();
+              return;
+            }
+            if (e.ctrlKey || e.metaKey) {
+              e.preventDefault();
+              setSelectedTextIds((prev) => {
+                const next = new Set(prev);
+                if (next.has(item.id)) {
+                  next.delete(item.id);
+                } else {
+                  next.add(item.id);
+                }
+                return next;
+              });
+            } else {
+              setActiveTextId(item.id);
+            }
+          }}
+          onMouseDown={(event) => onTextMoveMouseDown(event, item.id)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setSelectedTextIds((prev) => {
+              const next = new Set(prev);
+              next.add(item.id);
+              return next;
+            });
+            setContextTextId(item.id);
+            setContextMenu({ x: e.clientX, y: e.clientY });
+          }}
+        >
+          {showPreviewText ? value : null}
+          <div
+            role="presentation"
+            title="Resize"
+            onMouseDown={(event) => onTextResizeMouseDown(event, item.id)}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
             }}
-            onClick={() => setActiveTextId(item.id)}
+            style={{
+              position: 'absolute',
+              right: 0,
+              bottom: 0,
+              width: '12px',
+              height: '12px',
+              cursor: 'nwse-resize',
+              background:
+                'linear-gradient(135deg, transparent 0%, transparent 45%, rgba(17, 37, 59, 0.55) 46%, rgba(17, 37, 59, 0.55) 56%, transparent 57%, transparent 100%)',
+            }}
           />
-        );
-      }
-
-      return (
+        </button>
+      ) : shouldBeMultiLine ? (
+        <textarea
+          key={item.id}
+          style={{
+            ...textOverlayStyle,
+            boxSizing: 'border-box',
+            background: '#f7fbff',
+            border: '1px dotted rgba(0, 0, 0, 0.55)',
+            boxShadow: 'none',
+            padding: '2px 4px',
+            color: '#11253b',
+            fontSize: `${fontSize}px`,
+            fontFamily: item.fontFamily || 'inherit',
+            fontWeight: item.fontWeight || 'normal',
+            fontStyle: item.fontStyle || 'normal',
+            lineHeight: 1.3,
+            borderRadius: 0,
+            letterSpacing: '0px',
+            zIndex: 2,
+            resize: 'none',
+            overflow: 'auto',
+          }}
+          value={value}
+          autoFocus={isActive}
+          onChange={(e) => onTextsChange({ ...editedTexts, [item.id]: e.target.value })}
+          onBlur={() => setActiveTextId(null)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setActiveTextId(null);
+            }
+          }}
+          placeholder={item.content}
+        />
+      ) : (
         <input
           key={item.id}
           type="text"
           style={{
-            ...posStyle,
+            ...textOverlayStyle,
             boxSizing: 'border-box',
             background: '#f7fbff',
-            border: '1px solid rgba(80, 130, 190, 0.35)',
+            border: '1px dotted rgba(0, 0, 0, 0.55)',
+            boxShadow: 'none',
             padding: 0,
             color: '#11253b',
             fontSize: `${fontSize}px`,
@@ -752,6 +1272,25 @@ export function PdfPage({
           }}
           placeholder={item.content}
         />
+      );
+      return (
+        <Fragment key={item.id}>
+          {maskRects.map((rect, maskIndex) => {
+            const maskStyle = rectToStyle(rect);
+            return (
+              <div
+                key={`${item.id}_mask_${maskIndex}`}
+                style={{
+                  ...maskStyle,
+                  background: '#f7fbff',
+                  pointerEvents: 'none',
+                  zIndex: 1,
+                }}
+              />
+            );
+          })}
+          {textControl}
+        </Fragment>
       );
     }
 
@@ -884,9 +1423,108 @@ export function PdfPage({
       <div
         className="page-canvas-container"
         style={{ position: 'relative', display: 'inline-block' }}
+        onMouseDownCapture={onSelectionMouseDownCapture}
       >
         <canvas ref={canvasRef} />
         {viewport && textItems.map((item, i) => renderField(item, i))}
+        {selectionBox && (
+          <div
+            style={{
+              position: 'absolute',
+              left: selectionBox.left,
+              top: selectionBox.top,
+              width: selectionBox.width,
+              height: selectionBox.height,
+              border: '1px solid rgba(37, 99, 235, 0.9)',
+              background: 'rgba(59, 130, 246, 0.16)',
+              pointerEvents: 'none',
+              zIndex: 4,
+            }}
+          />
+        )}
+        {viewport && selectedTextIds.size > 0 && !selectionBox && (() => {
+          // Compute bounding box of all selected items in viewport coords
+          const selected = textItems.filter((item) => selectedTextIds.has(item.id) && item.type === 'text');
+          if (selected.length === 0) return null;
+          let minLeft = Infinity, minTop = Infinity;
+          for (const item of selected) {
+            const vr = getViewportRect(item.rect);
+            if (!vr) continue;
+            if (vr.left < minLeft) minLeft = vr.left;
+            if (vr.top < minTop) minTop = vr.top;
+          }
+          const toolbarTop = Math.max(0, minTop - 38);
+          const toolbarLeft = Math.max(0, minLeft);
+          const btnBase: CSSProperties = {
+            padding: '3px 10px',
+            border: '1px solid #c7d2dc',
+            borderRadius: '4px',
+            background: '#fff',
+            color: '#11253b',
+            fontSize: '12px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          };
+          return (
+            <div
+              style={{
+                position: 'absolute',
+                left: toolbarLeft,
+                top: toolbarTop,
+                display: 'flex',
+                gap: '4px',
+                alignItems: 'center',
+                background: 'rgba(255,255,255,0.97)',
+                border: '1px solid #c7d2dc',
+                borderRadius: '6px',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.13)',
+                padding: '3px 6px',
+                zIndex: 10,
+                pointerEvents: 'auto',
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <span style={{ fontSize: '12px', color: '#64748b', paddingRight: '4px' }}>
+                {selectedTextIds.size} selected
+              </span>
+              <button
+                type="button"
+                style={{ ...btnBase, color: '#0f766e', borderColor: '#99e6dc' }}
+                disabled={selectedTextIds.size < 2}
+                title="Merge selected areas into one"
+                onClick={(e) => { e.stopPropagation(); mergeSelectedTexts(); }}
+              >
+                Merge
+              </button>
+              <button
+                type="button"
+                style={{ ...btnBase, color: '#0f766e', borderColor: '#99e6dc' }}
+                disabled={selectedTextIds.size < 2}
+                title="Merge selected areas and add line breaks for vertically stacked areas"
+                onClick={(e) => { e.stopPropagation(); mergeSelectedTexts('stacked-newline'); }}
+              >
+                Merge + New Lines
+              </button>
+              <button
+                type="button"
+                style={{ ...btnBase, color: '#dc2626', borderColor: '#fca5a5' }}
+                title="Delete selected areas (Delete key)"
+                onClick={(e) => { e.stopPropagation(); deleteSelectedTexts(); }}
+              >
+                Delete
+              </button>
+              <button
+                type="button"
+                style={{ ...btnBase }}
+                title="Clear selection (Esc)"
+                onClick={(e) => { e.stopPropagation(); setSelectedTextIds(new Set()); }}
+              >
+                ✕
+              </button>
+            </div>
+          );
+        })()}
         {viewport && (
           <div
             className={`graphics-layer tool-${activeTool}`}
@@ -981,6 +1619,65 @@ export function PdfPage({
           </div>
         )}
       </div>
+      {contextMenu && (
+        <div
+          style={{
+            position: 'fixed',
+            left: `${contextMenu.x}px`,
+            top: `${contextMenu.y}px`,
+            background: '#fff',
+            border: '1px solid #ccc',
+            borderRadius: '4px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+            zIndex: 1000,
+            minWidth: '150px',
+          }}
+          onMouseLeave={() => setContextMenu(null)}
+        >
+          <button
+            type="button"
+            style={{
+              display: 'block',
+              width: '100%',
+              padding: '8px 12px',
+              border: 'none',
+              background: 'transparent',
+              textAlign: 'left',
+              cursor: 'pointer',
+              fontSize: '14px',
+              color: selectedTextIds.size < 2 ? '#999' : '#000',
+            }}
+            disabled={selectedTextIds.size < 2}
+            onClick={(e) => {
+              e.stopPropagation();
+              mergeSelectedTexts();
+            }}
+          >
+            Merge ({selectedTextIds.size})
+          </button>
+          <button
+            type="button"
+            style={{
+              display: 'block',
+              width: '100%',
+              padding: '8px 12px',
+              border: 'none',
+              background: 'transparent',
+              textAlign: 'left',
+              cursor: 'pointer',
+              fontSize: '14px',
+              color: selectedTextIds.size < 2 ? '#999' : '#000',
+            }}
+            disabled={selectedTextIds.size < 2}
+            onClick={(e) => {
+              e.stopPropagation();
+              mergeSelectedTexts('stacked-newline');
+            }}
+          >
+            Merge with new lines ({selectedTextIds.size})
+          </button>
+        </div>
+      )}
     </div>
   );
 }

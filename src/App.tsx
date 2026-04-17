@@ -238,6 +238,9 @@ function App() {
         return font;
       };
 
+      const rectsEqual = (left: number[], right: number[]) =>
+        left.length === right.length && left.every((value, index) => Math.abs(value - right[index]) < 0.01);
+
       // Apply form field values
       for (const field of fields) {
         const name = field.getName();
@@ -283,8 +286,11 @@ function App() {
         const pageEdits = editedTexts[key] || {};
 
         for (const item of textItems) {
-          const nextText = pageEdits[item.id];
-          if (nextText === undefined || nextText === item.content) continue;
+          const nextText = pageEdits[item.id] ?? item.content;
+          const sourceRects = item.sourceRects && item.sourceRects.length > 0 ? item.sourceRects : [item.rect];
+          const geometryChanged = sourceRects.length !== 1 || !rectsEqual(sourceRects[0], item.rect);
+          const textChanged = nextText !== item.content;
+          if (!geometryChanged && !textChanged) continue;
 
           const left = Math.min(item.rect[0], item.rect[2]);
           const right = Math.max(item.rect[0], item.rect[2]);
@@ -296,23 +302,31 @@ function App() {
           const fontSize = Math.max(4, item.fontSize || height * 0.9);
           const padding = Math.min(2, height * 0.12);
 
-          targetPage.drawRectangle({
-            x: left,
-            y: bottom,
-            width,
-            height,
-            color: rgb(1, 1, 1),
-          });
+          for (const sourceRect of sourceRects) {
+            const sourceLeft = Math.min(sourceRect[0], sourceRect[2]);
+            const sourceRight = Math.max(sourceRect[0], sourceRect[2]);
+            const sourceBottom = Math.min(sourceRect[1], sourceRect[3]);
+            const sourceTop = Math.max(sourceRect[1], sourceRect[3]);
+            targetPage.drawRectangle({
+              x: sourceLeft,
+              y: sourceBottom,
+              width: Math.max(1, sourceRight - sourceLeft),
+              height: Math.max(1, sourceTop - sourceBottom),
+              color: rgb(1, 1, 1),
+            });
+          }
 
-          targetPage.drawText(nextText, {
-            x: left,
-            y: bottom + padding,
-            size: fontSize,
-            font,
-            color: rgb(0, 0, 0),
-            maxWidth: width,
-            lineHeight: fontSize,
-          });
+          if (nextText.trim().length > 0) {
+            targetPage.drawText(nextText, {
+              x: left,
+              y: bottom + padding,
+              size: fontSize,
+              font,
+              color: rgb(0, 0, 0),
+              maxWidth: width,
+              lineHeight: fontSize,
+            });
+          }
         }
       }
 
